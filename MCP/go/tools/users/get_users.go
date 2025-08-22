@@ -1,0 +1,98 @@
+package tools
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+
+	"github.com/apacta/mcp-server/config"
+	"github.com/apacta/mcp-server/models"
+	"github.com/mark3labs/mcp-go/mcp"
+)
+
+func Get_usersHandler(cfg *config.APIConfig) func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args, ok := request.Params.Arguments.(map[string]any)
+		if !ok {
+			return mcp.NewToolResultError("Invalid arguments object"), nil
+		}
+		queryParams := make([]string, 0)
+		if val, ok := args["first_name"]; ok {
+			queryParams = append(queryParams, fmt.Sprintf("first_name=%v", val))
+		}
+		if val, ok := args["last_name"]; ok {
+			queryParams = append(queryParams, fmt.Sprintf("last_name=%v", val))
+		}
+		if val, ok := args["email"]; ok {
+			queryParams = append(queryParams, fmt.Sprintf("email=%v", val))
+		}
+		if val, ok := args["stock_location_id"]; ok {
+			queryParams = append(queryParams, fmt.Sprintf("stock_location_id=%v", val))
+		}
+		if val, ok := args["is_active"]; ok {
+			queryParams = append(queryParams, fmt.Sprintf("is_active=%v", val))
+		}
+		queryString := ""
+		if len(queryParams) > 0 {
+			queryString = "?" + strings.Join(queryParams, "&")
+		}
+		url := fmt.Sprintf("%s/users%s", cfg.BaseURL, queryString)
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			return mcp.NewToolResultErrorFromErr("Failed to create request", err), nil
+		}
+		// Set authentication based on auth type
+		// Fallback to single auth parameter
+		if cfg.APIKey != "" {
+			req.Header.Set("X-Auth-Token", cfg.APIKey)
+		}
+		req.Header.Set("Accept", "application/json")
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return mcp.NewToolResultErrorFromErr("Request failed", err), nil
+		}
+		defer resp.Body.Close()
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return mcp.NewToolResultErrorFromErr("Failed to read response body", err), nil
+		}
+
+		if resp.StatusCode >= 400 {
+			return mcp.NewToolResultError(fmt.Sprintf("API error: %s", body)), nil
+		}
+		// Use properly typed response
+		var result map[string]interface{}
+		if err := json.Unmarshal(body, &result); err != nil {
+			// Fallback to raw text if unmarshaling fails
+			return mcp.NewToolResultText(string(body)), nil
+		}
+
+		prettyJSON, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return mcp.NewToolResultErrorFromErr("Failed to format JSON", err), nil
+		}
+
+		return mcp.NewToolResultText(string(prettyJSON)), nil
+	}
+}
+
+func CreateGet_usersTool(cfg *config.APIConfig) models.Tool {
+	tool := mcp.NewTool("get_users",
+		mcp.WithDescription("Get list of users in company"),
+		mcp.WithString("first_name", mcp.Description("Used to filter on the `first_name` of the users")),
+		mcp.WithString("last_name", mcp.Description("Used to filter on the `last_name` of the users")),
+		mcp.WithString("email", mcp.Description("Used to filter on the `email` of the users")),
+		mcp.WithString("stock_location_id", mcp.Description("Used to filter on the `stock_location_id` of the users")),
+		mcp.WithBoolean("is_active", mcp.Description("Filters active/inactive users")),
+	)
+
+	return models.Tool{
+		Definition: tool,
+		Handler:    Get_usersHandler(cfg),
+	}
+}
